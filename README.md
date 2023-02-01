@@ -7,7 +7,7 @@ easier.
 
 ## Example
 
-To see the full example please see https://github.com/ricardomaraschini/plumber/tree/main/example
+To see the full example please see https://github.com/replicatedhq/plumber/tree/main/example
 
 ```go
 // start by embedding all YAML files we are going to render and create.
