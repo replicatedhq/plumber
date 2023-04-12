@@ -20,11 +20,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// BaseKustomizationPath is the location for the base kustomization.yaml file. This controller
-// expects to find this file among the read files from the embed reference. This is the file
-// that, after parse, is send over to all registered KMutators for further transformations.
-const BaseKustomizationPath = "/kustomize/base/kustomization.yaml"
-
 // KustomizeMutator is a function that is intended to mutate a Kustomization struct.
 type KustomizeMutator func(context.Context, *types.Kustomization) error
 
@@ -46,16 +41,16 @@ type FSMutator func(context.Context, filesys.FileSystem) error
 // to comply with the following layout:
 //
 // /kustomize
-// /kustomize/base/kustomization.yaml
-// /kustomize/base/object_a.yaml
-// /kustomize/base/object_a.yaml
 // /kustomize/overlay0/kustomization.yaml
 // /kustomize/overlay0/object_c.yaml
 // /kustomize/overlay1/kustomization.yaml
 // /kustomize/overlay1/object_d.yaml
+// /kustomize/overlay2/kustomization.yaml
+// /kustomize/overlay2/patch.yaml
 //
-// In other words, we have a base kustomization under base/ directory and each other directory is
-// treated as an overlay to be applied on top of base.
+// The structure above can be read as three different overlays, one can refer to the others by
+// means of the kustomization.yaml file. The kustomization.yaml file is expected to be a valid
+// kustomize file. The other files are expected to be valid Kubernetes objects or patches.
 type Renderer struct {
 	cli          client.Client
 	from         embed.FS
@@ -156,8 +151,8 @@ func (r *Renderer) Delete(ctx context.Context, overlay string) error {
 }
 
 // parse reads kustomize files and returns them all parsed as valid client.Object structs. Loads
-// everything from the embed.FS into a filesys.FileSystem instance, mutates the base kustomization
-// and returns the objects as a slice of client.Object.
+// everything from the embed.FS into a filesys.FileSystem instance, mutates the kustomization and
+// returns the objects as a slice of client.Object.
 func (r *Renderer) parse(ctx context.Context, overlay string) ([]client.Object, error) {
 	virtfs, err := LoadFS(r.from)
 	if err != nil {
@@ -170,7 +165,7 @@ func (r *Renderer) parse(ctx context.Context, overlay string) ([]client.Object, 
 		}
 	}
 
-	if err := r.mutateKustomization(ctx, virtfs); err != nil {
+	if err := r.mutateKustomization(ctx, virtfs, overlay); err != nil {
 		return nil, fmt.Errorf("error setting object name prefix: %w", err)
 	}
 
@@ -251,21 +246,22 @@ func (r *Renderer) typedObject(rsc *resource.Resource) (client.Object, error) {
 	return clientobj, nil
 }
 
-// mutateKustomization feeds all registered KMutators with the parsed BaseKustomizationPath.
+// mutateKustomization feeds all registered KMutators with the overlay parsed kustomization.
 // After feeding KMutators the output is marshaled and written back to the filesys.FileSystem.
-func (r *Renderer) mutateKustomization(ctx context.Context, fs filesys.FileSystem) error {
+func (r *Renderer) mutateKustomization(ctx context.Context, fs filesys.FileSystem, overlay string) error {
 	if len(r.kmutators) == 0 {
 		return nil
 	}
 
-	olddt, err := fs.ReadFile(BaseKustomizationPath)
+	kustomizationPath := path.Join("kustomize", overlay, "kustomization.yaml")
+	olddt, err := fs.ReadFile(kustomizationPath)
 	if err != nil {
-		return fmt.Errorf("error reading base kustomization: %w", err)
+		return fmt.Errorf("error reading overlay kustomization: %w", err)
 	}
 
 	var kust types.Kustomization
 	if err := yaml.Unmarshal(olddt, &kust); err != nil {
-		return fmt.Errorf("error parsing base kustomization: %w", err)
+		return fmt.Errorf("error parsing overlay kustomization: %w", err)
 	}
 
 	for _, mut := range r.kmutators {
@@ -276,11 +272,11 @@ func (r *Renderer) mutateKustomization(ctx context.Context, fs filesys.FileSyste
 
 	newdt, err := yaml.Marshal(kust)
 	if err != nil {
-		return fmt.Errorf("error marshaling base kustomization: %w", err)
+		return fmt.Errorf("error marshaling overlay kustomization: %w", err)
 	}
 
-	if err := fs.WriteFile(BaseKustomizationPath, newdt); err != nil {
-		return fmt.Errorf("error writing base kustomization: %w", err)
+	if err := fs.WriteFile(kustomizationPath, newdt); err != nil {
+		return fmt.Errorf("error writing overlay kustomization: %w", err)
 	}
 	return nil
 }
